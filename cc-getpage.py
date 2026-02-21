@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import argparse
+import random
 import requests
 import json
 import sys
@@ -7,13 +9,15 @@ import dontpanic
 import time
 from requests.exceptions import RequestException, ConnectionError
 
+VERSION = "1.1.0"
+
 INDEX_SERVER = "https://index.commoncrawl.org"
 CC_INDEX_URL = f"{INDEX_SERVER}/collinfo.json"
 
 dontpanic.set_message("\nExiting...")
 
 HEADERS = {
-    "User-Agent": "cc-getpage/1.0"
+    "User-Agent": f"cc-getpage/{VERSION} (https://github.com/thunderpoot/cc-getpage)"
 }
 
 
@@ -25,6 +29,45 @@ def fetch_crawl_ids():
     except requests.RequestException as e:
         print(f"Error fetching crawl IDs: {e}")
         return []
+
+
+def find_crawls_with_url(url, crawl_ids):
+    total = len(crawl_ids)
+    matches = []
+    print(f"\nProbing {total} crawls for {url} (Ctrl+C to stop early)...\n")
+
+    try:
+        for i, crawl in enumerate(crawl_ids, start=1):
+            crawl_id = crawl["id"]
+            query_url = f"{INDEX_SERVER}/{crawl_id}-index?url={url}&output=json"
+            status = f"[{i}/{total}] {crawl_id}..."
+
+            try:
+                response = requests.get(query_url, headers=HEADERS, timeout=10)
+                if response.status_code == 404:
+                    print(f"{status} no results")
+                    if i < total:
+                        time.sleep(random.uniform(10, 15))
+                    continue
+                response.raise_for_status()
+                if not response.text.strip():
+                    print(f"{status} empty response (rate limited?), stopping.")
+                    break
+                records = [line for line in response.text.strip().split("\n") if line]
+                if records:
+                    print(f"{status} found ({len(records)} records)")
+                    matches.append(crawl)
+                else:
+                    print(f"{status} no results")
+            except (RequestException, ConnectionError) as e:
+                print(f"{status} error: {e}")
+
+            if i < total:
+                time.sleep(random.uniform(10, 15))
+    except KeyboardInterrupt:
+        print(f"\n\nStopped early. Found {len(matches)} matching crawl(s) so far.")
+
+    return matches
 
 
 def select_crawl_id(crawl_ids, per_page=10):
@@ -74,6 +117,9 @@ def search_commoncrawl(url, crawl_id, max_retries=3):
     for attempt in range(max_retries):
         try:
             response = requests.get(query_url, headers=HEADERS, timeout=10)
+            if response.status_code == 404:
+                print("No results found in the index.")
+                return None
             response.raise_for_status()
             records = [json.loads(line) for line in response.text.strip().split("\n") if line]
 
@@ -107,7 +153,7 @@ def search_commoncrawl(url, crawl_id, max_retries=3):
 
 def select_record(records):
     while True:
-        choice = input("\nSelect an entry to download (enter number): ").strip()
+        choice = input("\nSelect an entry (enter number): ").strip()
         try:
             index = int(choice) - 1
             if 0 <= index < len(records):
@@ -143,26 +189,42 @@ def download_from_commoncrawl(record, output_file="page.warc.gz"):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python cc-getpage.py <URL> [Crawl_ID]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Retrieve pages from the Common Crawl archive.")
+    parser.add_argument("url", help="URL to look up in Common Crawl")
+    parser.add_argument("crawl_id", nargs="?", default=None, help="Crawl ID to search (optional)")
+    parser.add_argument("--viewpage", action="store_true", help="Print a Common Crawl viewer URL instead of downloading")
+    parser.add_argument("--version", action="version", version=f"cc-getpage {VERSION}")
+    args = parser.parse_args()
 
-    url = sys.argv[1]
-    crawl_id = sys.argv[2] if len(sys.argv) > 2 else None
+    url = args.url
+    crawl_id = args.crawl_id
 
     if not crawl_id:
         crawl_ids = fetch_crawl_ids()
         if not crawl_ids:
             sys.exit(1)
-        crawl_id = select_crawl_id(crawl_ids)
-        if not crawl_id:
+        matches = find_crawls_with_url(url, crawl_ids)
+        if not matches:
+            print("\nNo crawls contain this URL.")
             sys.exit(1)
+        elif len(matches) == 1:
+            crawl_id = matches[0]["id"]
+            print(f"\nOnly one match: {crawl_id}")
+        else:
+            print(f"\nFound {len(matches)} crawls with this URL.")
+            crawl_id = select_crawl_id(matches)
+            if not crawl_id:
+                sys.exit(1)
 
     records = search_commoncrawl(url, crawl_id)
     if records:
         record = select_record(records)
         if record:
-            download_from_commoncrawl(record)
+            if args.viewpage:
+                viewer_url = f"{INDEX_SERVER}/{crawl_id}/{record['timestamp']}/{url}"
+                print(f"\n{viewer_url}")
+            else:
+                download_from_commoncrawl(record)
 
 
 if __name__ == "__main__":

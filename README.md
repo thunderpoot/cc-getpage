@@ -10,18 +10,28 @@ For **bulk downloads** or **entire snapshots**, please use the official [`cc-dow
 ## Features
 
 - Fetches specific web pages from Common Crawl archives
-- Lists available crawl snapshots for selection
+- Automatically probes crawls to find which ones contain your URL
 - Supports manual or automatic crawl selection
 - Displays archived versions of a URL for selection
 - Downloads only the necessary WARC segment
 - Includes automatic retries with backoff
+- `--viewpage` option to get a Common Crawl viewer URL instead of downloading
 
 
 ## Usage
 
 ```sh
-python cc-getpage.py <URL> [CRAWL-ID]
+python cc-getpage.py [--viewpage] <URL> [CRAWL-ID]
 ```
+
+### Options
+
+| Option | Description |
+|---|---|
+| `--viewpage` | Print a Common Crawl viewer URL instead of downloading the WARC segment |
+| `--version` | Show the program version |
+
+If `CRAWL-ID` is omitted, the program will probe all available crawls to find which ones contain the given URL. This is rate-limited to be polite to the index server, so it may take a while. Press `Ctrl+C` to stop early and work with whatever matches have been found so far.
 
 
 ## **Contribute**
